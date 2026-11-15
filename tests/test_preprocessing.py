@@ -1,16 +1,14 @@
 import numpy as np
-from numcompute.preprocessing import StandardScaler, MinMaxScaler, OneHotEncoder
+
+from numcompute.preprocessing import StandardScaler
 
 
-# ---------------------------------------------------------
-# StandardScaler Tests (3 tests)
-# ---------------------------------------------------------
-
-def test_standard_scaler_shape_preserved():
+def test_standard_scaler():
     X = np.array([[1, 2], [3, 4]])
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
     assert X_scaled.shape == X.shape
+
 
 
 def test_standard_scaler_mean_zero():
