@@ -12,3 +12,9 @@ dependencies = ["numpy"]
 
 [tool.setuptools.packages.find]
 where = ["."]
+
+[tool.pytest.ini_options]
+# Lets plain `pytest` find the packages in the project root
+# (numcompute now, numcompute_stream for Assignment 2).
+pythonpath = ["."]
+testpaths = ["tests"]
