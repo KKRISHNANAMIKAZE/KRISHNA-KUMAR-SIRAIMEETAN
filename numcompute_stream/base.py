@@ -201,7 +201,12 @@ class StreamingMetric(BaseStreamEstimator, ABC):
         print(metric.result())
 
     Subclasses implement :meth:`reset`, :meth:`update` and :meth:`result`.
+    A metric that needs predicted probabilities instead of predicted labels
+    (such as ROC AUC) sets ``needs_proba = True``.
     """
+
+    #: True if ``update`` expects scores/probabilities rather than labels.
+    needs_proba = False
 
     @abstractmethod
     def reset(self):
