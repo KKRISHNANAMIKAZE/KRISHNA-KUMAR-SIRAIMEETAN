@@ -1,382 +1,237 @@
-# NumCompute
+# numcompute_stream
 
-**A lightweight numerical computing toolkit built with Python and NumPy.**
+**A streaming, decision-tree-based machine learning framework built from scratch with NumPy.**
 
-NumCompute provides utilities for numerical differentiation, sorting and searching, statistical analysis, ranking, classification and regression metrics, data preprocessing, CSV loading, and pipeline composition.
+`numcompute_stream` extends the NumCompute toolkit (Assignment 1) for *online learning*: data arrive in chunks, every component learns incrementally through `partial_fit()` / `update()` / `update_stats()`, and a single decision tree handles the stream by **buffered retraining**: chunks are collected in a buffer and the tree is rebuilt whenever the buffer holds `buffer_size` samples.
 
-The package is designed to offer useful numerical and data-processing operations through a simple API, without relying on libraries such as SciPy, pandas, or scikit-learn.
+Only **NumPy** and **matplotlib** are used (plus the Python standard library). No scikit-learn, pandas or SciPy.
 
-## Features
+> The original group package from Assignment 1 is still in `numcompute/`, and its documentation has moved to [`numcompute/docs/README_assignment1.md`](numcompute/docs/README_assignment1.md). The new package reuses its validation helpers (`numcompute.utils`) and ranking (`numcompute.rank`).
 
-- **Sorting and searching:** Stable sorting, multi-key sorting, binary search, top-\(k\) selection, and quick selection.
-- **Numerical differentiation:** Finite-difference gradient and Jacobian estimation, including batched variants.
-- **Statistics:** Mean, median, standard deviation, minimum, maximum, histogram, and quantile calculations.
-- **Ranking:** Multiple ranking methods, configurable ordering, axis support, and NaN handling.
-- **Evaluation metrics:** Accuracy, confusion matrix, precision, recall, F1 score, and mean squared error.
-- **Preprocessing:** Standard scaling, min-max scaling, and one-hot encoding.
-- **Pipelines:** Sequential preprocessing and optional final estimator integration.
-- **Input/output:** CSV loading into NumPy arrays.
+---
+
+## Contents
+
+- [Project structure](#project-structure)
+- [Installation](#installation)
+- [Quick start](#quick-start)
+- [Modules](#modules)
+- [The buffered decision tree](#the-buffered-decision-tree)
+- [Design decisions](#design-decisions)
+- [Testing](#testing)
+- [Demo notebook](#demo-notebook)
+- [Benchmarks](#benchmarks)
+- [Data](#data)
+- [Limitations](#limitations)
+
+## Project structure
+
+```
+numcompute_stream/          the new streaming package
+    __init__.py             public API (import everything from here)
+    utils.py                shared input validation and error messages
+    base.py                 base classes: StreamingTransformer, StreamingClassifier, StreamingMetric
+    io.py                   read_csv, iter_csv_chunks, chunk_array
+    tree.py                 DecisionTreeClassifier (buffered retraining)
+    stats.py                StreamingStats, StreamingHistogram
+    preprocessing.py        StandardScaler, Imputer, OneHotEncoder
+    metrics.py              Accuracy, Precision, Recall, F1, ConfusionMatrix, ROCAUC (+ batch functions)
+    pipeline.py             Pipeline with partial_fit
+    stream.py               StreamTrainer (test-then-train loop with logging)
+    visualise.py            plot_metric_over_time, compare_models, plot_predictions_vs_ground_truth, ...
+tests/                      test_stream_*.py for the new package (plus the Assignment 1 tests)
+demo/stream_demo.ipynb      end-to-end streaming demo (already executed, with outputs)
+demo/figures/               figures saved by the demo
+benchmark/                  loop vs vectorised, and buffer_size experiments
+benchmark/results/          CSV results and plots from the benchmarks
+data/elec.csv               Electricity Market stream data set (see data/README.md)
+numcompute/                 Assignment 1 package (unchanged)
+```
 
 ## Installation
 
-### Prerequisites
-
-- Python 3.10 or later
-- Git
-- NumPy
-
-### Install directly from Git
+You need Python 3.9 or later.
 
 ```bash
-python -m pip install "https://github.com/Sammie1875/deeplearners-toolkit.git"
+git clone https://github.com/KKRISHNANAMIKAZE/KRISHNA-KUMAR-SIRAIMEETAN.git
+cd KRISHNA-KUMAR-SIRAIMEETAN
+git checkout individual/kk
+python -m pip install numpy matplotlib pytest
 ```
 
-
-### Install from a local clone
-
-```bash
-git clone https://github.com/Sammie1875/deeplearners-toolkit.git
-cd deeplearners-toolkit
-python -m pip install .
-```
-
-For development, install in editable mode:
+Optionally install the project as a package (then it can be imported from anywhere):
 
 ```bash
 python -m pip install -e .
 ```
 
+To run the demo notebook you also need Jupyter: `python -m pip install notebook`.
+
 ## Quick start
 
-### Sorting and searching
-
 ```python
-import numpy as np
-from numcompute import stable_sort, binary_search
-
-values = np.array([5, 2, 8, 1, 3])
-
-sorted_values = stable_sort(values)
-position, found = binary_search(sorted_values, 3)
-
-print(sorted_values)
-# [1 2 3 5 8]
-
-print(position, found)
-# 2 True
-```
-
-### Statistical calculations
-
-```python
-import numpy as np
-from numcompute import mean, median, std
-
-values = np.array([10, 20, 30, 40, 50])
-
-print(mean(values))    # 30.0
-print(median(values))  # 30.0
-print(std(values))     # Population standard deviation
-```
-
-### Numerical differentiation
-
-```python
-import numpy as np
-from numcompute import gradient
-
-def f(x):
-    return np.sum(x ** 2)
-
-x = np.array([2.0, 3.0])
-
-g = gradient(f, x, method="central")
-print(g)
-# Approximately [4. 6.]
-```
-
-### Classification metrics
-
-```python
-import numpy as np
-from numcompute import accuracy, precision, recall, f1
-
-y_true = np.array([1, 0, 1, 1, 0])
-y_pred = np.array([1, 0, 0, 1, 0])
-
-print(accuracy(y_true, y_pred))  # 0.8
-print(precision(y_true, y_pred)) # 1.0
-print(recall(y_true, y_pred))    # 2/3
-print(f1(y_true, y_pred))        # 0.8
-```
-
-### Data preprocessing
-
-```python
-import numpy as np
-from numcompute import StandardScaler
-
-X = np.array([
-    [10.0, 100.0],
-    [20.0, 200.0],
-    [30.0, 300.0],
-])
-
-scaler = StandardScaler()
-X_scaled = scaler.fit_transform(X)
-
-print(X_scaled)
-```
-
-### Pipeline composition
-
-```python
-from numcompute import Pipeline, StandardScaler
+from numcompute_stream import (
+    Pipeline, Imputer, StandardScaler, DecisionTreeClassifier,
+    StreamTrainer, iter_csv_chunks,
+)
+from numcompute_stream.visualise import plot_metric_over_time
 
 pipe = Pipeline([
+    ("impute", Imputer()),
     ("scale", StandardScaler()),
+    ("model", DecisionTreeClassifier(max_depth=5, buffer_size=1000)),
 ])
 
-X_transformed = pipe.fit_transform(X)
+trainer = StreamTrainer(pipe, verbose=True)          # test-then-train + logging
+trainer.run(iter_csv_chunks("data/elec.csv", 250, label_column="class"))
+
+print(trainer.summary())
+plot_metric_over_time(trainer.get("cumulative_accuracy"),
+                      title="Cumulative accuracy", ylabel="accuracy",
+                      retrain_points=trainer.retrain_chunks(), show=True)
 ```
 
-The pipeline supports preprocessing components that implement `fit()` and `transform()`. Its optional estimator support depends on the estimator implementing the expected `fit()` and `predict()` interface.
+Each line of the verbose log looks like:
 
-## API overview
+```
+chunk   8 | seen   2000 | chunk acc 0.608 | cumulative acc 0.740 | buffer 0 | mem 4.1 KB  RETRAINED
+```
 
-### 1. `io.py` — Input/output
+Using the tree directly, exactly as in the specification:
 
-| Function | Description |
-|---|---|
-| `read_csv(path, delimiter=",", missing_value=np.nan, dtype=float)` | Loads CSV data into a NumPy array using NumPy's `genfromtxt`. |
+```python
+tree = DecisionTreeClassifier(max_depth=5, buffer_size=500)
+for X_chunk, y_chunk in stream:
+    tree.partial_fit(X_chunk, y_chunk)
+tree.predict(X_new)
+```
 
-### 2. `sort_search.py` — Sorting and searching
+## Modules
 
-| Function | Description |
-|---|---|
-| `stable_sort(values, axis=-1)` | Sorts array elements along a specified axis. |
-| `multi_key_sort(data, ascending=True)` | Returns indices that order rows using multiple keys. |
-| `binary_search(sorted_array, x)` | Returns the insertion index and whether the target exists. |
-| `top_k(values, k, largest=True, return_indices=True)` | Selects the \(k\) largest or smallest elements or their indices. |
-| `quick_select(values, k, largest=True, return_index=True)` | Selects an element by rank without fully sorting the input. |
+**Shape conventions (every module):** `X` is a 2-D float array of shape `(n_samples, n_features)` (rows = samples, axis 0); `y` is 1-D of shape `(n_samples,)` with integer or text labels. A 1-D `X`, a wrong number of columns, NaN where it is not allowed, infinity, or mismatched lengths all raise a clear `ValueError` or `TypeError` that names the problem, for example:
 
-Check each function's docstring for index conventions and output ordering.
+```
+ValueError: X has 2 features, but StandardScaler was fitted with 3 features
+NotFittedError: This DecisionTreeClassifier instance is not fitted yet. ... The buffer
+                holds 600 of 1000 samples needed for the first tree; call flush() to train on them now.
+```
 
-### 3. `optim.py` — Numerical differentiation
-
-| Function | Description |
-|---|---|
-| `gradient(f, x, h=1e-5, method="central")` | Estimates the gradient of a scalar-valued function. |
-| `jacobian(F, x, h=1e-5, method="central")` | Estimates the Jacobian of a vector-valued function. |
-| `gradient_batched(f, x, h=1e-5, method="central")` | Estimates gradients using batched function evaluations. |
-| `jacobian_batched(F, x, h=1e-5, method="central")` | Estimates Jacobians using batched function evaluations. |
-
-Supported finite-difference methods are central and forward differences.
-
-### 4. `stats.py` — Descriptive statistics
-
-| Function | Description |
-|---|---|
-| `mean(data, axis=None, ignore_nan=True)` | Calculates arithmetic means. |
-| `median(data, axis=None, ignore_nan=True)` | Calculates medians. |
-| `std(data, axis=None, ignore_nan=True, ddof=0)` | Calculates standard deviations. |
-| `minimum(data, axis=None, ignore_nan=True)` | Calculates minimum values. |
-| `maximum(data, axis=None, ignore_nan=True)` | Calculates maximum values. |
-| `histogram(data, bins=10, range=None, ignore_nan=True)` | Computes histogram counts and bin edges. |
-| `quantile(data, q, axis=None, ignore_nan=True)` | Computes quantiles. |
-
-### 5. `rank.py` — Ranking and percentile utilities
-
-| Function | Description |
-|---|---|
-| `rankdata(values, method="average", ascending=True, axis=None, nan_policy="raise")` | Computes observation ranks. |
-| `percentile_rank(values, score, kind="rank", nan_policy="raise")` | Calculates the percentile rank of one or more scores. |
-
-Supported ranking methods are `average`, `dense`, `ordinal`, `min`, and `max`. NaN policies are `raise`, `omit`, and `propagate`.
-
-Supported percentile-rank kinds are `rank`, `weak`, `strict`, and `mean`.
-
-### 6. `metrics.py` — Evaluation metrics
-
-| Function | Description |
-|---|---|
-| `accuracy(y_true, y_pred)` | Calculates the proportion of correct predictions. |
-| `confusion_matrix(y_true, y_pred, labels=None)` | Counts true versus predicted class combinations. |
-| `precision(y_true, y_pred, positive_label=1)` | Calculates positive predictive value. |
-| `recall(y_true, y_pred, positive_label=1)` | Calculates the proportion of actual positives identified. |
-| `f1(y_true, y_pred, positive_label=1)` | Calculates the harmonic mean of precision and recall. |
-| `mse(y_true, y_pred)` | Calculates mean squared error for numerical predictions. |
-
-Precision, recall, and F1 use a specified positive class and are intended for binary classification.
-
-### 7. `preprocessing.py` — Data preprocessing
-
-| Class | Methods | Description |
+| Module | Main objects | Streaming API |
 |---|---|---|
-| `StandardScaler` | `fit`, `transform`, `fit_transform` | Centers features and scales by standard deviation. |
-| `MinMaxScaler` | `fit`, `transform`, `fit_transform` | Scales features to a specified range. |
-| `OneHotEncoder` | `fit`, `transform`, `fit_transform` | Encodes categorical columns as binary features. |
+| `io` | `read_csv`, `iter_csv_chunks`, `chunk_array` | `iter_csv_chunks` reads the file lazily, `chunk_size` rows at a time; `chunk_array` splits in-memory data (optionally shuffled, with a seed) |
+| `tree` | `DecisionTreeClassifier` | `partial_fit` buffers and retrains; `fit`, `flush`, `predict`, `predict_proba`, `apply`, `export_text`, `get_depth`, `get_n_leaves` |
+| `stats` | `StreamingStats`, `StreamingHistogram` | `update_stats(X_chunk)` updates count, mean, variance, std, min, max, NaN count and quantiles; the histogram supports a sliding `window` |
+| `preprocessing` | `StandardScaler`, `Imputer`, `OneHotEncoder` | `partial_fit` updates running mean/variance, fill values, and categories |
+| `metrics` | `Accuracy`, `Precision`, `Recall`, `F1`, `ConfusionMatrix`, `ROCAUC` | `update(y_true, y_pred)`, `result()`, `reset()`; `window=k` gives a rolling metric over the last `k` chunks |
+| `pipeline` | `Pipeline` | `partial_fit` updates every step in order; `predict`, `predict_proba`, `score`, `flush`, `clone`, `reset` |
+| `stream` | `StreamTrainer` | `fit_chunk`, `score_chunk`, `process_chunk`, `run`; logs per-chunk metrics, memory footprint and cumulative accuracy |
+| `visualise` | `plot_metric_over_time`, `compare_models`, `plot_predictions_vs_ground_truth`, `plot_confusion_matrix`, `plot_benchmark` | every function takes `ax=`, `save_path=` and `show=` and returns `(fig, ax)` |
+| `base` | `StreamingTransformer`, `StreamingClassifier`, `StreamingMetric` | shared interfaces plus `get_params`, `set_params`, `clone` |
+| `utils` | `check_X`, `check_X_y`, `check_n_features`, `check_is_fitted`, `NotFittedError`, ... | one place for every input check, reusing `numcompute.utils` |
 
-Fit preprocessing components on training data and reuse the fitted components to transform new data.
+Batch helpers are also available: `accuracy_score`, `precision_score`, `recall_score`, `f1_score`, `confusion_matrix` and an exact rank-based `roc_auc_score`.
 
-### 8. `pipeline.py` — Pipeline composition
+## The buffered decision tree
 
-| Class or method | Description |
-|---|---|
-| `Pipeline(steps)` | Creates an ordered sequence of named components. |
-| `fit_transform(X)` | Fits preprocessing steps and returns transformed data. |
-| `fit(X, y)` | Fits preprocessing steps and an optional final estimator. |
-| `transform(X)` | Applies fitted preprocessing steps. |
-| `predict(X)` | Transforms input and predicts using the final estimator. |
+```python
+DecisionTreeClassifier(max_depth=5, min_samples_split=2, max_features=None,
+                       criterion="gini", buffer_size=500,
+                       implementation="vectorized", allow_new_features=False,
+                       random_state=None)
+```
 
-## Performance and complexity
+* **`partial_fit(X_chunk, y_chunk)`** appends the chunk to the buffer. Once the buffer holds **at least** `buffer_size` samples, the tree is retrained on the buffered data **only** and the buffer is cleared. A chunk larger than `buffer_size` triggers exactly one retrain on all of it. An empty chunk is ignored.
+* **Between retrains**, `predict` uses the most recent tree. Before the first tree exists, `predict` raises `NotFittedError` saying how full the buffer is; `flush()` trains on a partly full buffer straight away.
+* **`fit(X, y)`** trains from scratch immediately, ignoring the buffer.
+* Every build is logged in `retrain_log_` (training size, seconds, stream position); `n_retrains_` counts builds and `buffer_count_` shows the buffer size.
+* Labels may be integers or text. A class that first appears after the last retrain is added to `classes_` and gets probability 0 until the next retrain. Changing label type mid-stream (numbers → text) raises `TypeError`.
 
-The following table gives theoretical or typical complexity estimates, rather than benchmark measurements. Actual performance depends on array dimensions, data types, NumPy's implementation, and the cost of user-supplied functions.
+**How a tree is grown** (same rules and order as the course guide): a node becomes a leaf if it is at `max_depth`, if it is pure, if it has fewer than `min_samples_split` samples, or if no split has information gain above 0. Otherwise it asks `X[:, f] <= t` with the largest gain (Gini or entropy), sends "yes" rows left, and grows the left child first.
 
-Let:
+## Design decisions
 
-- \(n\) = number of input elements or samples.
-- \(d\) = number of features or input dimensions.
-- \(c\) = number of classes.
-- \(m\) = number of output dimensions.
-- \(b\) = number of histogram bins.
-- \(q\) = number of queried scores for percentile ranking.
+* **Vectorised split search.** For each feature the rows are sorted once; a cumulative sum of one-hot class counts gives the left and right class counts for *every* threshold at once, and all impurities come from one array expression. Thresholds are midpoints between neighbouring distinct values, so real-valued features work (the course example only had 0/1 features). Features are processed in blocks so the temporary array stays under 4 million elements.
+* **Vectorised prediction.** The tree is stored as flat arrays (`feature`, `threshold`, `left`, `right`, `value`). All samples move down one level at a time with `np.where`, so the Python loop runs once per level (at most `max_depth` times), never once per sample.
+* **Deterministic tie rules.** Gains are rounded to 12 decimals; a split must beat the best so far *strictly*, so ties go to the lowest feature index, then the lowest threshold; a leaf tie goes to the first class in `classes_` (like `np.bincount(y).argmax()`). The loop and vectorised implementations therefore build identical trees, which the tests check.
+* **Numerical stability.** Running mean and variance use Chan et al.'s parallel merge (the chunk form of Welford's algorithm), which stays exact even for values around 10⁹ where the naive formula fails. A zero-variance feature gets scale 1 (output 0, not NaN). Entropy treats 0·log 0 as 0. Zero-division in precision/recall/F1 returns 0 without warnings.
+* **NaN policy.** `Imputer` fills NaN with running estimates; `StandardScaler` and `StreamingStats` skip NaN per feature; the tree refuses NaN with a message pointing to `Imputer`; metrics refuse NaN labels.
+* **Quantiles: exact or approximate, chosen explicitly.** `StreamingStats(quantile_method="exact")` keeps every row (matches `np.nanquantile`); `"reservoir"` (default) keeps a uniform random sample of `capacity` rows (Algorithm R, vectorised per chunk) for fixed memory and is exact until the stream exceeds `capacity`. Five interpolation methods are supported: linear, lower, higher, nearest, midpoint.
+* **Honest evaluation.** `StreamTrainer` scores each chunk *before* training on it (prequential / test-then-train), so accuracy is always measured on unseen data.
+* **Growing one-hot output.** `OneHotEncoder` adds a new category as a new column at the *right-hand end*, so existing columns never move; with `allow_new_features=True` the tree pads its buffer with zeros for the new columns and ignores them until the next retrain. The default is strict (`False`), so a wrong column count is an error, not silent broadcasting.
+* **Streaming AUC in fixed memory.** `ROCAUC` keeps two score histograms (1000 bins) and integrates the ROC curve from their cumulative sums; it matches the exact rank-based AUC to within 0.001 in the tests.
+* **Shared base classes.** Every transformer, classifier and metric follows one of three interfaces in `base.py`, so `Pipeline` and `StreamTrainer` work with any of them, and `clone()` makes fresh copies for comparisons.
 
-### Sorting and searching
-
-| Operation | Time complexity | Auxiliary space |
-|---|---:|---:|
-| `stable_sort()` | \(O(n\log n)\) typical | \(O(n)\) typical |
-| `multi_key_sort()` | \(O(n\log n)\) | \(O(n)\) |
-| `binary_search()` | \(O(\log n)\) | \(O(1)\) |
-| `top_k()` | Typically \(O(n)\) | \(O(n)\) if indices are returned; otherwise implementation-dependent |
-| `quick_select()` | Typically \(O(n)\) | \(O(n)\) if indices are returned; otherwise implementation-dependent |
-
-Selection operations using partitioning typically avoid the \(O(n\log n)\) cost of a complete sort. Their precise bounds depend on the underlying implementation.
-
-### Numerical differentiation
-
-Assuming each function evaluation has cost \(C_f\) for `gradient()` or \(C_F\) for `jacobian()`:
-
-| Operation | Function evaluations | Time complexity | Output space |
-|---|---:|---:|---:|
-| `gradient()` with central differences | \(2d\), plus validation/baseline evaluations if applicable | \(O(dC_f)\) | \(O(d)\) |
-| `gradient()` with forward differences | \(d+1\) | \(O(dC_f)\) | \(O(d)\) |
-| `jacobian()` with central differences | \(2d\), plus any baseline evaluation | \(O(dC_F)\) | \(O(md)\) |
-| `jacobian()` with forward differences | \(d+1\) | \(O(dC_F)\) | \(O(md)\) |
-
-Batched variants may reduce Python-call overhead, but the cost of evaluating the function over the batch still depends on its implementation. Their temporary memory use can be larger because perturbations are constructed together.
-
-### Statistics
-
-For a one-dimensional input of \(n\) elements:
-
-| Function | Typical time complexity | Auxiliary space |
-|---|---:|---:|
-| `mean()` | \(O(n)\) | \(O(n)\) worst case for conversions or temporaries |
-| `median()` | Typically \(O(n)\) using selection-based algorithms | \(O(n)\) worst case |
-| `std()` | \(O(n)\) | \(O(n)\) worst case for conversions or temporaries |
-| `minimum()` | \(O(n)\) | \(O(n)\) worst case for conversions or temporaries |
-| `maximum()` | \(O(n)\) | \(O(n)\) worst case for conversions or temporaries |
-| `histogram()` | Typically \(O(n+b)\) | \(O(n+b)\) worst case |
-| `quantile()` | Typically selection-based; depends on requested quantiles and NumPy implementation | Depends on input conversion and temporary arrays |
-
-Axis-based operations scale with the total number of input elements. NaN-aware operations may have additional overhead.
-
-### Ranking
-
-| Function | Time complexity | Auxiliary space |
-|---|---:|---:|
-| `rankdata()` on \(n\) values | \(O(n\log n)\) | \(O(n)\) |
-| `rankdata()` on multidimensional arrays | \(O(N\log k)\) typical, where \(N\) is total elements and \(k\) is the ranked axis length | \(O(N)\) |
-| `percentile_rank()` | \(O(n\log n + q\log n)\) | \(O(n+q)\) |
-
-`rankdata()` sorts each ranked slice. `percentile_rank()` sorts the reference data once and uses binary-search insertion positions for the queries.
-
-### Evaluation metrics
-
-| Function | Time complexity | Auxiliary space |
-|---|---:|---:|
-| `accuracy()` | \(O(n)\) | \(O(n)\) |
-| `confusion_matrix()` | \(O(nc^2+c^2)\) for the provided matrix-multiplication implementation | \(O(nc+c^2)\) |
-| `precision()` | \(O(n)\) | \(O(n)\) |
-| `recall()` | \(O(n)\) | \(O(n)\) |
-| `f1()` | \(O(n)\) | \(O(n)\) |
-| `mse()` | \(O(n)\) | \(O(n)\) |
-
-The confusion-matrix implementation constructs Boolean match arrays and multiplies them to count class combinations. This is more expensive in time and temporary memory than a conventional single-pass counting implementation.
-
-### Preprocessing
-
-For \(n\) samples, \(d\) input features, and \(C\) total one-hot output features:
-
-| Operation | Time complexity | Auxiliary space |
-|---|---:|---:|
-| `StandardScaler.fit()` | \(O(nd)\) | \(O(d)\) stored statistics |
-| `StandardScaler.transform()` | \(O(nd)\) | \(O(nd)\) for the output |
-| `MinMaxScaler.fit()` | \(O(nd)\) | \(O(d)\) stored statistics |
-| `MinMaxScaler.transform()` | \(O(nd)\) | \(O(nd)\) for the output |
-| `OneHotEncoder.fit()` | Typically \(O(nd\log n)\) | \(O(C)\) for stored categories |
-| `OneHotEncoder.transform()` | \(O(nC)\) | \(O(nC)\) for the encoded output |
-
-The exact complexity of one-hot encoding depends on the number of unique categories in each feature and the implementation's intermediate arrays.
-
-### Input/output
-
-| Function | Time complexity | Auxiliary space |
-|---|---:|---:|
-| `read_csv()` | \(O(N)\) typical for \(N\) parsed input values | \(O(N)\) for the resulting array |
-
-CSV parsing also depends on file size, data types, delimiters, and missing-value handling.
-
-### Pipeline
-
-For a pipeline with \(s\) preprocessing steps, its complexity is the sum of the costs of its component operations.
-
-| Operation | Time complexity | Auxiliary space |
-|---|---|---|
-| `fit_transform()` | Sum of component fit and transform costs | Depends on intermediate transformed arrays |
-| `fit()` | Sum of preprocessing costs and final estimator fitting cost | Depends on component state and intermediate arrays |
-| `transform()` | Sum of preprocessing transform costs | Depends on intermediate transformed arrays |
-| `predict()` | Sum of preprocessing transform costs and estimator prediction cost | Depends on intermediate arrays and predictions |
-
-These estimates describe algorithmic growth, not measured execution speed. Benchmark results should be reported separately with the machine, Python version, NumPy version, input sizes, and benchmark method.
-
-## Performance Benchmarking
-
-We compared the performance of NumPy-based vectorised operations against equivalent Python-loop implementations. Three operations were selected for benchmarking: Mean, Mean Squared Error (MSE), and StandardScaler.
-
-The experiments used a fixed random seed of 42 for reproducibility. Each operation was warmed up before performing five timed runs, and the median execution time was recorded.
-
-### Benchmark Results
-
-| Operation | Elements | Python Loop (ms) | NumPy (ms) | Speedup |
-|---|---:|---:|---:|---:|
-| Mean | 100,000 | 7.0359 | 0.4829 | 14.57× |
-| MSE | 100,000 | 22.0071 | 0.3809 | 57.78× |
-| StandardScaler | 50,000 | 29.0550 | 0.7463 | 38.93× |
-
-### Observations
-
-All three NumPy implementations were faster than their Python-loop equivalents. MSE achieved the highest speedup of 57.78×, followed by StandardScaler at 38.93× and Mean at 14.57×.
-
-These results highlight the advantages of vectorised numerical operations for the tested input sizes. Execution times may vary depending on the hardware and software environment.
-
-### Running the Benchmarks
-
-Run the following command from the project root:
+## Testing
 
 ```bash
-python -m numcompute.benchmarking
+python -m pytest            # all tests (Windows: use python -m pytest, not pytest)
+python -m pytest tests/test_stream_tree.py -v
 ```
 
-The script generates reproducible input data, measures execution times and prints a comparison table.
+The whole repository has **293 passing tests**: 161 from Assignment 1 and **132 new test cases (113 test functions)** for `numcompute_stream`:
 
-## Team Work Split
+| Test file | Cases | What it covers |
+|---|---|---|
+| `test_stream_tree.py` | 35 | course 12-student example (depth 2 and 3, Gini and entropy), loop = vectorised trees, thresholds, tie rules, all buffering behaviour, new classes, NaN / width / label-type errors, invalid settings |
+| `test_stream_stats.py` | 18 | streamed moments = NumPy (with NaN, ddof 0/1), chunk-size independence, 10⁹-offset stability, all-NaN features, 5 quantile methods, reservoir exactness, bounded memory and repeatability, histograms with windows |
+| `test_stream_io.py` | 16 | headers, text/int labels, missing cells, Excel BOM, blank lines, line-numbered errors, lazy chunk reading, chunk splitting and shuffling |
+| `test_stream_metrics.py` | 16 | streamed = batch confusion matrix and P/R/F1 (macro, micro, weighted), hand-computed values, zero division, rolling windows, growing labels, exact AUC vs pairwise reference, binned AUC accuracy |
+| `test_stream_utils.py` | 15 | every validation helper and its message |
+| `test_stream_preprocessing.py` | 12 | scaler streaming = batch, constant columns (A1 regression), NaN handling, wrong widths (A1 regression), imputer updating on the fly, one-hot growth and unknown categories |
+| `test_stream_pipeline_trainer.py` | 10 | pipeline = manual chaining, step validation, clone/reset, test-then-train order, cumulative accuracy, logging, buffer size vs number of retrains |
+| `test_stream_base.py` | 6 | abstract classes, params, clone, fit vs partial_fit |
+| `test_stream_visualise.py` | 4 | every plot saves, keeps NaN gaps, labels and validates input |
 
-| Team Member | Tasks Done |
-|---|---|
-| Sameena Shafiulla Khan | Setup the initial git repo. Implemented `io.py` (CSV/data loading) and `preprocessing.py` (`StandardScaler`, `MinMaxScaler`, `OneHotEncoder`); wrote unit tests for both modules; contributed to README and documentation. |
-| Veeksha Nakka | Implemented `stats.py` (statistical functions and NaN handling), `metrics.py` (classification and regression metrics), and `benchmarking.py`; wrote unit tests for these modules and prepared benchmark results. |
-| Krishna Kumar Siraimeetan | Implemented `rank.py` (ranking methods, tie handling, and percentiles) and `utils.py`; wrote unit tests for these modules and created `demo/quickstart.ipynb` after module integration. |
-| Aakash Rajan | Implemented `sort_search.py` (sorting, searching, Top-K, and quickselect), `optim.py` (finite-difference gradients and Jacobians), and `pipeline.py`; wrote unit tests for these modules. Contributed to final integration and package setup, README, documentation and demo video |
+## Demo notebook
+
+```bash
+cd demo
+jupyter notebook stream_demo.ipynb
+```
+
+The notebook (saved with all outputs) loads `data/elec.csv` with `read_csv`, summarises it with `StreamingStats`, streams it in 250-row chunks through `Imputer → StandardScaler → DecisionTreeClassifier(max_depth=5, buffer_size=1000)` with `StreamTrainer`, and plots cumulative accuracy, rolling accuracy, AUC, a comparison of `buffer_size=250` vs `5000`, predictions vs ground truth on the latest unseen chunk, the learned rules, a missing-value robustness check, and a sliding-window histogram. It runs in about 10 seconds.
+
+## Benchmarks
+
+```bash
+python benchmark/bench_loop_vs_vectorised.py
+python benchmark/bench_buffer_size.py
+```
+
+Both scripts print a table, save a CSV and a PNG to `benchmark/results/`, and record the environment. Times are medians of repeated runs after a warm-up run. The numbers below were measured on Python 3.13, NumPy 2.5, Linux x86-64; your times will differ, but the ratios should be similar.
+
+**(a) Loop vs vectorised** (every pair was checked to give identical results):
+
+| Task | Size | Loop | Vectorised | Speed-up |
+|---|---|---|---|---|
+| Tree training (depth 5) | 4,000 rows | 0.334 s | 0.011 s | 31× |
+| Tree prediction | 45,312 rows | 0.093 s | 0.003 s | 29× |
+| Streaming mean & variance | 45,312 rows | 0.096 s | 0.008 s | 12× |
+| Confusion matrix | 45,312 rows | 0.013 s | 0.0006 s | 23× |
+
+![Loop vs vectorised](benchmark/results/loop_vs_vectorised.png)
+
+**(b) Effect of `buffer_size`** (Electricity stream, 250-row chunks, test-then-train, depth-5 tree):
+
+| buffer_size | Final accuracy | Retrains | Time per retrain | Total retrain time | Peak model memory |
+|---|---|---|---|---|---|
+| 250 | 0.753 | 181 | 1.8 ms | 0.32 s | 6 KB |
+| 500 | 0.753 | 90 | 2.8 ms | 0.25 s | 21 KB |
+| 1000 | 0.746 | 45 | 4.9 ms | 0.22 s | 46 KB |
+| 2500 | 0.753 | 18 | 12.2 ms | 0.22 s | 128 KB |
+| 5000 | 0.729 | 9 | 22.7 ms | 0.20 s | 265 KB |
+
+Larger buffers make each retrain slower and use more memory, but there are fewer retrains, so total training time stays about the same. Accuracy is similar up to 2,500 and drops at 5,000: a big buffer means the tree is up to 20 chunks out of date, and during the market change around chunk 155 its rolling accuracy falls to about 50% while small buffers recover quickly. Note that a bigger buffer also delays the first prediction (chunk 21 for 5,000), and accuracy only counts scored chunks.
+
+![Buffer size](benchmark/results/buffer_size.png)
+
+## Data
+
+`data/elec.csv` is the Electricity Market (elec2) stream data set: 45,312 half-hourly records from New South Wales, Australia, with 6 numeric features and a binary label (price up / down). Source and citation are in [`data/README.md`](data/README.md).
+
+## Limitations
+
+* The tree is rebuilt from scratch at each retrain; it does not update incrementally (that is the assignment's buffered design), and data from earlier buffers is not reused.
+* `ROCAUC` is for binary problems; for multi-class data use the other metrics.
+* `OneHotEncoder` encodes every column it is given. The pipeline is sequential, so mixing numeric and categorical columns needs the encoder to be applied to the categorical columns before the pipeline.
+* Reservoir quantiles are approximate once the stream exceeds `capacity`; use `quantile_method="exact"` for exact values on small streams.
