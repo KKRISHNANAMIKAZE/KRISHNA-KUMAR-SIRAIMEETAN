@@ -41,6 +41,7 @@ __all__ = [
     "check_positive_int",
     "check_random_state",
     "get_array_info",
+    "nbytes_of",
     "safe_divide",
     "validate_array",
 ]
@@ -213,7 +214,7 @@ def check_X_y(X, y, allow_nan=True, allow_empty=True):
     return X, y
 
 
-def check_n_features(X, n_features_expected, owner="this estimator"):
+def check_n_features(X, n_features_expected, owner="this estimator", name="X"):
     """Check that ``X`` has the number of columns seen during fitting.
 
     Parameters
@@ -224,6 +225,8 @@ def check_n_features(X, n_features_expected, owner="this estimator"):
         Number of columns the estimator was fitted on.
     owner : str
         Name of the estimator, used in the error message.
+    name : str, default="X"
+        Name of the input, used in the error message.
 
     Raises
     ------
@@ -232,7 +235,7 @@ def check_n_features(X, n_features_expected, owner="this estimator"):
     """
     if X.shape[1] != n_features_expected:
         raise ValueError(
-            f"X has {X.shape[1]} features, but {owner} was fitted with "
+            f"{name} has {X.shape[1]} features, but {owner} was fitted with "
             f"{n_features_expected} features"
         )
 
@@ -302,6 +305,40 @@ def check_positive_int(value, name, minimum=1, allow_none=False):
     if value < minimum:
         raise ValueError(f"{name} must be at least {minimum}; got {value}")
     return int(value)
+
+
+def nbytes_of(obj, _seen=None):
+    """Estimate the memory held by NumPy arrays inside an object.
+
+    Walks through attributes, lists, tuples and dictionaries (including
+    nested estimators inside a pipeline) and adds up ``ndarray.nbytes``.
+    Each array is counted once. Used to log the memory footprint of a model
+    while it streams.
+
+    Parameters
+    ----------
+    obj : object
+        Any object, for example a fitted model or pipeline.
+
+    Returns
+    -------
+    int
+        Total bytes held in NumPy arrays.
+    """
+    if _seen is None:
+        _seen = set()
+    if id(obj) in _seen:
+        return 0
+    _seen.add(id(obj))
+    if isinstance(obj, np.ndarray):
+        return int(obj.nbytes)
+    if isinstance(obj, dict):
+        return sum(nbytes_of(v, _seen) for v in obj.values())
+    if isinstance(obj, (list, tuple)):
+        return sum(nbytes_of(v, _seen) for v in obj)
+    if hasattr(obj, "__dict__") and not isinstance(obj, type):
+        return nbytes_of(vars(obj), _seen)
+    return 0
 
 
 def check_random_state(seed):
